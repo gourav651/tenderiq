@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
-import { Briefcase, Search, FileText, UserCheck, LogOut, Sparkles } from "lucide-react";
+import { Briefcase, Search, UserCheck, LogOut, Sparkles, BarChart3 } from "lucide-react";
 
 export function Navbar() {
   const pathname = usePathname();
@@ -21,6 +21,8 @@ export function Navbar() {
 
   const navLinks = [
     { href: "/tenders", label: "Tender Discovery", icon: Search },
+    { href: "/applications", label: "My Applications", icon: Briefcase },
+    { href: "/analytics", label: "Analytics", icon: BarChart3 },
     { href: "/onboarding", label: "Company Profile", icon: UserCheck },
   ];
 

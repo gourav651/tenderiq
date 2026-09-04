@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { CreateCompanySchema, UpdateCompanySchema } from "../../src/modules/company/company.schema";
+import { CreateCompanySchema } from "../../src/modules/company/company.schema";
 import { AuthService, ForbiddenError } from "../../src/modules/auth/auth.service";
 
 // Test 1: Company Schema Validation

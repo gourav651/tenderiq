@@ -1,5 +1,5 @@
 import { TenderRepository, TenderWithDetails } from "./tender.repository";
-import { QueryTendersSchema, QueryTendersInput, TenderIdParamSchema } from "./tender.schema";
+import { QueryTendersSchema, TenderIdParamSchema } from "./tender.schema";
 import { AIService, AISearchIntent } from "../ai/ai.service";
 import { Tender } from "@/generated/prisma/client";
 

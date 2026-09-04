@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/navbar";
 import {
   ArrowLeft,
@@ -9,7 +10,6 @@ import {
   Calendar,
   Clock,
   FileText,
-  IndianRupee,
   MapPin,
   Sparkles,
   ShieldCheck,
@@ -20,6 +20,11 @@ import {
   FileSpreadsheet,
   ExternalLink,
   Layers,
+  Award,
+  RefreshCw,
+  XCircle,
+  MessageSquare,
+  Send,
 } from "lucide-react";
 
 interface TenderDocument {
@@ -72,14 +77,49 @@ interface TenderDetails {
   aiAnalyses: AIAnalysis[];
 }
 
+interface EligibilityResult {
+  matchStatus: "MATCH" | "PARTIAL_MATCH" | "INELIGIBLE";
+  matchScore: number;
+  summary: string;
+  matchedCriteria: string[];
+  missingCriteria: string[];
+  recommendations: string[];
+}
+
+interface QAMessage {
+  sender: "user" | "ai";
+  text: string;
+  citedRequirements?: string[];
+  confidence?: string;
+}
+
 export default function TenderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
   const tenderId = resolvedParams.id;
+  const router = useRouter();
 
   const [tender, setTender] = useState<TenderDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "requirements" | "documents" | "ai">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "requirements" | "documents" | "ai" | "qa">("overview");
+
+  // AI Eligibility evaluation states
+  const [evaluating, setEvaluating] = useState(false);
+  const [eligibilityResult, setEligibilityResult] = useState<EligibilityResult | null>(null);
+  const [eligibilityError, setEligibilityError] = useState<string | null>(null);
+
+  // Application tracking state
+  const [trackingLoading, setTrackingLoading] = useState(false);
+
+  // Q&A Chat states
+  const [qaInput, setQaInput] = useState("");
+  const [qaMessages, setQaMessages] = useState<QAMessage[]>([
+    {
+      sender: "ai",
+      text: "Hello! Ask me any specific technical or financial question regarding this tender document.",
+    },
+  ]);
+  const [qaLoading, setQaLoading] = useState(false);
 
   useEffect(() => {
     async function fetchTender() {
@@ -102,14 +142,103 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
     fetchTender();
   }, [tenderId]);
 
+  const handleEvaluateEligibility = async () => {
+    setEvaluating(true);
+    setEligibilityError(null);
+    try {
+      const res = await fetch(`/api/tenders/${tenderId}/eligibility`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (json.success) {
+        setEligibilityResult(json.data);
+      } else {
+        setEligibilityError(json.error?.message || "Eligibility evaluation failed. Please make sure your company profile is set up.");
+      }
+    } catch (err) {
+      console.error("Failed to evaluate eligibility", err);
+      setEligibilityError("Failed to connect to AI evaluation server.");
+    } finally {
+      setEvaluating(false);
+    }
+  };
+
+  const handleTrackApplication = async () => {
+    setTrackingLoading(true);
+    try {
+      const res = await fetch("/api/applications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenderId, status: "SAVED" }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        alert("Tender added to your application tracker!");
+        router.push("/applications");
+      } else {
+        if (json.error?.code === "CONFLICT") {
+          alert("This tender is already in your application tracker.");
+          router.push("/applications");
+        } else {
+          alert(json.error?.message || "Please complete company onboarding or sign in first.");
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Failed to track application.");
+    } finally {
+      setTrackingLoading(false);
+    }
+  };
+
+  const handleSendQA = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!qaInput.trim() || qaLoading) return;
+
+    const userQ = qaInput.trim();
+    setQaInput("");
+    setQaMessages((prev) => [...prev, { sender: "user", text: userQ }]);
+    setQaLoading(true);
+
+    try {
+      const res = await fetch(`/api/tenders/${tenderId}/qa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: userQ }),
+      });
+      const json = await res.json();
+
+      if (json.success) {
+        setQaMessages((prev) => [
+          ...prev,
+          {
+            sender: "ai",
+            text: json.data.answer,
+            citedRequirements: json.data.citedRequirements,
+            confidence: json.data.confidence,
+          },
+        ]);
+      } else {
+        setQaMessages((prev) => [
+          ...prev,
+          { sender: "ai", text: json.error?.message || "Failed to answer question." },
+        ]);
+      }
+    } catch (err) {
+      console.error(err);
+      setQaMessages((prev) => [
+        ...prev,
+        { sender: "ai", text: "Error connecting to AI Q&A server." },
+      ]);
+    } finally {
+      setQaLoading(false);
+    }
+  };
+
   const formatCurrency = (amount?: number) => {
     if (!amount) return "Not Disclosed";
-    if (amount >= 10000000) {
-      return `₹${(amount / 10000000).toFixed(2)} Crore`;
-    }
-    if (amount >= 100000) {
-      return `₹${(amount / 100000).toFixed(2)} Lakhs`;
-    }
+    if (amount >= 10000000) return `₹${(amount / 10000000).toFixed(2)} Crore`;
+    if (amount >= 100000) return `₹${(amount / 100000).toFixed(2)} Lakhs`;
     return `₹${amount.toLocaleString("en-IN")}`;
   };
 
@@ -157,16 +286,13 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
     );
   }
 
-  // Pre-generated AI Summary analysis if present
   const aiSummary = tender.aiAnalyses.find((a) => a.type === "SUMMARY")?.result;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased selection:bg-blue-600 selection:text-white">
       <Navbar />
 
-      {/* Main Container */}
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-        {/* Back Link */}
         <div>
           <Link
             href="/tenders"
@@ -183,7 +309,6 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
 
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 relative z-10">
             <div className="space-y-4 max-w-4xl">
-              {/* Badges */}
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="font-mono font-medium text-slate-300 bg-slate-900 border border-slate-700 px-3 py-1 rounded-lg">
                   Ref: {tender.referenceNumber}
@@ -206,12 +331,10 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
                 </span>
               </div>
 
-              {/* Title */}
               <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight leading-tight">
                 {tender.title}
               </h1>
 
-              {/* Organization & Location */}
               <div className="flex flex-wrap items-center gap-4 text-xs sm:text-sm text-slate-400">
                 <div className="flex items-center gap-1.5">
                   <Building2 className="h-4 w-4 text-slate-500" />
@@ -227,15 +350,31 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
               </div>
             </div>
 
-            {/* Application Action Button */}
+            {/* Action Buttons */}
             <div className="flex flex-col gap-3 shrink-0 sm:w-64">
               <button
                 type="button"
-                onClick={() => alert(`Starting application process for Tender: ${tender.referenceNumber}`)}
-                className="w-full rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 px-6 py-3.5 text-sm font-bold text-white shadow-xl hover:brightness-110 active:scale-95 transition text-center"
+                disabled={trackingLoading}
+                onClick={handleTrackApplication}
+                className="w-full rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 px-6 py-3.5 text-sm font-bold text-white shadow-xl hover:brightness-110 active:scale-95 transition text-center disabled:opacity-50"
               >
-                Track & Apply Now
+                {trackingLoading ? "Saving..." : "Track & Apply Now"}
               </button>
+
+              <button
+                type="button"
+                disabled={evaluating}
+                onClick={handleEvaluateEligibility}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-indigo-500/40 bg-indigo-500/10 px-4 py-2.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-500/20 transition disabled:opacity-50"
+              >
+                {evaluating ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
+                )}
+                <span>Run AI Eligibility Analysis</span>
+              </button>
+
               {tender.sourceUrl && (
                 <a
                   href={tender.sourceUrl}
@@ -250,7 +389,7 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
             </div>
           </div>
 
-          {/* Key Quick Stats Bar */}
+          {/* Quick Stats Bar */}
           <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 border-t border-slate-800/80 pt-6">
             <div className="rounded-xl border border-slate-800/60 bg-slate-950/60 p-3.5">
               <span className="text-xs text-slate-500 block mb-1">Estimated Budget</span>
@@ -285,6 +424,66 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
           </div>
         </section>
 
+        {/* AI Eligibility Result Scorecard Box */}
+        {eligibilityResult && (
+          <section className="rounded-3xl border border-indigo-500/40 bg-gradient-to-br from-indigo-950/80 via-slate-900 to-slate-950 p-6 shadow-2xl space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+            <div className="flex items-center justify-between border-b border-indigo-500/20 pb-4">
+              <div className="flex items-center gap-2">
+                <Award className="h-6 w-6 text-indigo-400" />
+                <h2 className="text-lg font-bold text-indigo-200">AI Eligibility Match Scorecard</h2>
+              </div>
+              <div
+                className={`px-3 py-1 rounded-full text-xs font-extrabold uppercase ${
+                  eligibilityResult.matchStatus === "MATCH"
+                    ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
+                    : eligibilityResult.matchStatus === "PARTIAL_MATCH"
+                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                    : "bg-red-500/20 text-red-400 border border-red-500/40"
+                }`}
+              >
+                {eligibilityResult.matchStatus.replace("_", " ")} ({eligibilityResult.matchScore}%)
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-300 leading-relaxed font-medium">{eligibilityResult.summary}</p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                  <CheckCircle2 className="h-4 w-4" /> Matched Qualifications
+                </h4>
+                <ul className="space-y-1.5 text-xs text-slate-300">
+                  {eligibilityResult.matchedCriteria.map((item, idx) => (
+                    <li key={idx} className="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
+                      • {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                  <XCircle className="h-4 w-4" /> Missing / Gap Requirements
+                </h4>
+                <ul className="space-y-1.5 text-xs text-slate-300">
+                  {eligibilityResult.missingCriteria.map((item, idx) => (
+                    <li key={idx} className="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
+                      • {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {eligibilityError && (
+          <div className="rounded-xl border border-red-500/30 bg-red-950/20 p-4 text-xs text-red-400 flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>{eligibilityError}</span>
+          </div>
+        )}
+
         {/* Tab Navigation */}
         <div className="border-b border-slate-800">
           <nav className="flex gap-4 text-sm font-semibold">
@@ -292,7 +491,8 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
               { id: "overview", label: "Tender Overview", icon: FileText },
               { id: "requirements", label: `Requirements (${tender.requirements.length})`, icon: Layers },
               { id: "documents", label: `Documents (${tender.documents.length})`, icon: Download },
-              { id: "ai", label: "✨ AI Intelligence Summary", icon: Sparkles },
+              { id: "ai", label: "✨ AI Executive Summary", icon: Sparkles },
+              { id: "qa", label: "💬 Interactive Q&A Assistant", icon: MessageSquare },
             ].map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -316,7 +516,6 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
 
         {/* Tab Content Areas */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Main Tab Details */}
           <div className="lg:col-span-2 space-y-6">
             {/* Overview Tab */}
             {activeTab === "overview" && (
@@ -444,17 +643,6 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
                           </ul>
                         </div>
                       )}
-
-                      {aiSummary.eligibilityCriteria && (
-                        <div>
-                          <h4 className="font-semibold text-indigo-300 mb-1">Financial & Technical Eligibility</h4>
-                          <ul className="list-disc pl-5 space-y-1 text-slate-300">
-                            {aiSummary.eligibilityCriteria.map((ec: string, idx: number) => (
-                              <li key={idx}>{ec}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
                     </div>
                   ) : (
                     <div className="text-sm text-slate-400 py-4 text-center">
@@ -463,7 +651,6 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
                   )}
                 </div>
 
-                {/* AI Disclaimer Box */}
                 <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-xs text-slate-400 flex items-start gap-2.5">
                   <ShieldCheck className="h-4 w-4 text-slate-500 shrink-0 mt-0.5" />
                   <p>
@@ -471,6 +658,66 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
                     AI-generated summaries are intended purely for quick discovery and eligibility evaluation. Always refer to original official procurement documents for binding legal terms.
                   </p>
                 </div>
+              </div>
+            )}
+
+            {/* Interactive Q&A Tab */}
+            {activeTab === "qa" && (
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4 shadow-xl">
+                <div className="flex items-center gap-2 border-b border-slate-800 pb-4">
+                  <MessageSquare className="h-5 w-5 text-blue-400" />
+                  <h3 className="text-lg font-bold text-slate-100">Interactive Tender Document Q&A</h3>
+                </div>
+
+                {/* Chat History Messages */}
+                <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
+                  {qaMessages.map((msg, idx) => (
+                    <div
+                      key={idx}
+                      className={`flex flex-col ${msg.sender === "user" ? "items-end" : "items-start"}`}
+                    >
+                      <div
+                        className={`rounded-2xl p-4 max-w-xl text-xs sm:text-sm leading-relaxed ${
+                          msg.sender === "user"
+                            ? "bg-blue-600 text-white rounded-br-none"
+                            : "bg-slate-950 border border-slate-800 text-slate-200 rounded-bl-none"
+                        }`}
+                      >
+                        <p>{msg.text}</p>
+                        {msg.citedRequirements && msg.citedRequirements.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-slate-800/80 text-[11px] text-blue-300">
+                            <strong>Cited Clauses: </strong> {msg.citedRequirements.join(", ")}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {qaLoading && (
+                    <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-950 p-3 rounded-xl border border-slate-800 w-48">
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-400" />
+                      <span>Analyzing RFP documents...</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Q&A Input Box */}
+                <form onSubmit={handleSendQA} className="flex gap-2 border-t border-slate-800 pt-4">
+                  <input
+                    type="text"
+                    value={qaInput}
+                    onChange={(e) => setQaInput(e.target.value)}
+                    placeholder="Ask a question (e.g. What is the minimum experience required?)..."
+                    className="flex-1 rounded-xl border border-slate-800 bg-slate-950 px-4 py-2.5 text-xs sm:text-sm text-slate-100 focus:border-blue-500 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={qaLoading || !qaInput.trim()}
+                    className="rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-blue-500 transition disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    <span>Ask</span>
+                  </button>
+                </form>
               </div>
             )}
           </div>
@@ -498,10 +745,11 @@ export default function TenderDetailPage({ params }: { params: Promise<{ id: str
               <div className="pt-4 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => alert(`Starting application process for Tender: ${tender.referenceNumber}`)}
-                  className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-blue-500 transition text-center shadow-lg"
+                  disabled={trackingLoading}
+                  onClick={handleTrackApplication}
+                  className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-blue-500 transition text-center shadow-lg disabled:opacity-50"
                 >
-                  Create Application Draft
+                  {trackingLoading ? "Saving..." : "Create Application Draft"}
                 </button>
               </div>
             </div>
