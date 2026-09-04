@@ -1,0 +1,334 @@
+// TenderIQ Prisma Schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// Enums
+// ==========================================
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum TenderStatus {
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+enum TenderType {
+  GOODS
+  WORKS
+  SERVICES
+  CONSULTANCY
+}
+
+enum RequirementType {
+  FINANCIAL
+  TECHNICAL
+  EXPERIENCE
+  CERTIFICATION
+  DOCUMENT
+  LEGAL
+  ELIGIBILITY
+  TIMELINE
+  OTHER
+}
+
+enum ApplicationStatus {
+  SAVED
+  INTERESTED
+  PREPARING
+  SUBMITTED
+  UNDER_EVALUATION
+  WON
+  LOST
+}
+
+enum AIAnalysisType {
+  SUMMARY
+  ELIGIBILITY
+  REQUIREMENTS
+  QUESTION_ANSWER
+}
+
+enum AIAnalysisStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum NotificationType {
+  DEADLINE
+  APPLICATION_UPDATE
+  SYSTEM
+  AI_ANALYSIS
+}
+
+// ==========================================
+// Domain Models
+// ==========================================
+
+model Company {
+  id                     String   @id @default(uuid())
+  name                   String
+  description            String?  @db.Text
+  industry               String?
+  website                String?
+  location               String?
+  state                  String?
+  city                   String?
+  annualTurnover         Decimal? @db.Decimal(18, 2)
+  yearsOfExperience      Int?
+  certifications         String[]
+  areasOfOperation       String[]
+  procurementPreferences Json?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  // Relations
+  users               User[]
+  applications        Application[]
+  eligibilityAnalyses AIAnalysis[]
+  notifications       Notification[]
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  name          String?
+  emailVerified Boolean  @default(false)
+  image         String?
+  role          UserRole @default(USER)
+
+  // Direct reference for MVP single-company focus
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  sessions      Session[]
+  accounts      Account[]
+  applications  Application[]
+  aiAnalyses    AIAnalysis[]
+  notifications Notification[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                    String    @id @default(uuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issuer                String?
+  accessToken           String?   @db.Text
+  refreshToken          String?   @db.Text
+  idToken               String?   @db.Text
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?   @db.Text
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model Verification {
+  id         String    @id @default(uuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+}
+
+model Tender {
+  id              String  @id @default(uuid())
+  referenceNumber String
+  title           String
+  description     String? @db.Text
+
+  organization String
+  category     String
+
+  country  String  @default("India")
+  state    String?
+  city     String?
+  location String?
+
+  estimatedValue Decimal? @db.Decimal(18, 2)
+  currency       String   @default("INR")
+
+  tenderType TenderType @default(WORKS)
+
+  publishedAt        DateTime?
+  submissionDeadline DateTime
+
+  status TenderStatus @default(ACTIVE)
+
+  sourceName String?
+  sourceUrl  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  documents    TenderDocument[]
+  requirements TenderRequirement[]
+  applications Application[]
+  aiAnalyses   AIAnalysis[]
+
+  @@unique([referenceNumber, sourceName])
+  @@index([category])
+  @@index([state])
+  @@index([organization])
+  @@index([submissionDeadline])
+  @@index([status])
+  @@index([estimatedValue])
+}
+
+model TenderDocument {
+  id       String @id @default(uuid())
+  tenderId String
+  tender   Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  name     String
+  fileName String
+  fileUrl  String
+  publicId String?
+
+  mimeType String?
+  fileSize Int?
+
+  documentType String?
+
+  extractedText String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenderId])
+}
+
+model TenderRequirement {
+  id       String @id @default(uuid())
+  tenderId String
+  tender   Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  type        RequirementType @default(OTHER)
+  title       String
+  description String          @db.Text
+
+  isMandatory Boolean @default(true)
+
+  sourceDocumentId String?
+  sourcePage       Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenderId])
+  @@index([type])
+}
+
+model Application {
+  id String @id @default(uuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  tenderId String
+  tender   Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  createdByUserId String
+  user            User   @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  status ApplicationStatus @default(SAVED)
+
+  notes String? @db.Text
+
+  submissionDate DateTime?
+  outcomeDate    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, tenderId])
+  @@index([companyId])
+  @@index([tenderId])
+  @@index([status])
+}
+
+model AIAnalysis {
+  id String @id @default(uuid())
+
+  tenderId String
+  tender   Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  // Present for private eligibility, null for global tender summaries
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  type   AIAnalysisType
+  status AIAnalysisStatus @default(PENDING)
+
+  inputReference String?
+  result         Json?
+
+  model         String @default("gemini-2.5-flash")
+  promptVersion String @default("1.0")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenderId, type])
+  @@index([companyId, tenderId])
+}
+
+model Notification {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  title   String
+  message String           @db.Text
+
+  isRead Boolean @default(false)
+
+  relatedTenderId      String?
+  relatedApplicationId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@index([companyId])
+}
